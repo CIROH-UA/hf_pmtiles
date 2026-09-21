@@ -24,6 +24,13 @@ sqlite3 $1 "UPDATE divides SET divide_id = CAST(substr(divide_id,5) AS INTEGER),
 EOF
 RUN chmod +x /usr/bin/fix_ids
 
+COPY <<'EOF' /usr/bin/simplify_gage_data
+!#/bin/bash
+ogrinfo $1 -sql "SELECT DisableSpatialIndex('hydrolocations','geom')"
+sqlite3 $1 "UPDATE hydrolocations SET id = CAST(substr(id,4) AS INTEGER);"
+EOF
+RUN chmod +x /usr/bin/simplify_gage_data
+
 # remove as many strings as possible and convert to int where possible e.g. float meters to int cm will be much smaller
 # The smaller we make these attributes, the more geometry we can keep in our tiles
 COPY <<'EOF' /usr/bin/make_flowpath_tiles
@@ -97,6 +104,7 @@ FROM base AS conus_to_fgb
 WORKDIR /fgb/conus
 ADD --unpack https://communityhydrofabric.com/hydrofabrics/community/conus_nextgen.tar.gz /raw_hf/
 RUN fix_ids /raw_hf/conus_nextgen.gpkg
+RUN simplify_gage_data /raw_hf/conus_nextgen.gpkg
 RUN ogr2ogr -s_srs EPSG:5070 -t_srs CRS:84 flowpaths.fgb /raw_hf/conus_nextgen.gpkg flowpaths
 RUN ogr2ogr -s_srs EPSG:5070 -t_srs CRS:84 divides.fgb /raw_hf/conus_nextgen.gpkg divides
 RUN ogr2ogr -s_srs EPSG:5070 -t_srs CRS:84 hydrolocations.fgb /raw_hf/conus_nextgen.gpkg hydrolocations
@@ -118,7 +126,7 @@ RUN make_divide_tiles && make_flowpath_tiles
 FROM conus_to_fgb AS conus_to_mbtiles
 RUN make_divide_tiles 7 && make_flowpath_tiles
 RUN tippecanoe -z10 -Z2 -r1 --cluster-distance=5 -o hydrolocations.mbtiles -l hydrolocations hydrolocations.fgb -P
-RUN tippecanoe -z10 -Z3 -r1 -j '{ "*": [ "any", [ "==", "hl_reference", "gages" ]] }' -o gages.mbtiles -l gages hydrolocations.fgb -P
+RUN tippecanoe -z10 -Z3 -r1 -j '{ "*": [ "any", [ "==", "hl_reference", "gages" ]] }' -o gages.mbtiles -l gages -y id -y hl_uri -y hl_reference -T id:int hydrolocations.fgb -P
 
 
 FROM base AS merge_mbtiles
@@ -132,7 +140,7 @@ COPY --from=conus_to_mbtiles /fgb/conus/*.mbtiles /fgb/conus/
 RUN tile-join -o divides.mbtiles /fgb/ak/divides.mbtiles /fgb/hi/divides.mbtiles /fgb/prvi/divides.mbtiles /fgb/conus/divides.mbtiles
 RUN tile-join -o flowpaths.mbtiles /fgb/ak/flowpaths.mbtiles /fgb/hi/flowpaths.mbtiles /fgb/prvi/flowpaths.mbtiles /fgb/conus/flowpaths.mbtiles
 # RUN tile-join -o hydrolocations.mbtiles /fgb/gl/hydrolocations.mbtiles /fgb/conus/hydrolocations.mbtiles
-# RUN tile-join -o gages.mbtiles /fgb/gl/gages.mbtiles /fgb/conus/gages.mbtiles
+RUN tile-join -x hl_reference -o gages.mbtiles  /fgb/conus/gages.mbtiles
 
 FROM base AS convert_to_pmtiles
 WORKDIR /mbtiles/merged
